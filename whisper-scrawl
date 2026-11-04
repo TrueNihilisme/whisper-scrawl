@@ -1,0 +1,96 @@
+#!/usr/bin/python3
+"""whisper-scrawl: Scrawl "command" transcriber backed by a local whisper.cpp.
+
+Why: Scrawl's Apple engine on this Mac (SpeechTranscriber) has no Ukrainian or
+Russian, and Scrawl never falls back to DictationTranscriber (helper/Media.swift),
+so we transcribe locally with whisper.cpp instead (2026-11-04).
+
+Contract (Scrawl README, "Your own model (command)"): Scrawl runs this program with
+the recording as a 16 kHz mono WAV, discards stderr, and expects exactly one JSON
+object on stdout and exit code 0. Two runs may overlap, so every run works in its
+own temporary directory.
+
+Usage (absolute paths only, Scrawl passes argv without a shell):
+    whisper-scrawl --model /path/ggml-model.bin --language uk {audio}
+
+System /usr/bin/python3 (3.9) on purpose: it does not move with Homebrew upgrades.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_CLI = "/opt/homebrew/bin/whisper-cli"
+
+
+def build_words(tokens):
+    """Join whisper tokens into words: a token that starts with a space opens a new word."""
+    words = []
+    for tok in tokens:
+        text = tok.get("text", "")
+        if not text or text.startswith("[_"):  # [_BEG_], [_TT_123] and other specials
+            continue
+        off = tok.get("offsets") or {}
+        t0, t1 = int(off.get("from", 0)), int(off.get("to", 0))
+        if text.startswith(" ") or not words:
+            words.append({"t0": t0, "t1": t1, "text": text.strip()})
+        else:
+            words[-1]["text"] += text
+            words[-1]["t1"] = max(words[-1]["t1"], t1)
+    for w in words:
+        if w["t1"] < w["t0"]:
+            w["t1"] = w["t0"]
+    return [w for w in words if w["text"]]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--language", default="uk")
+    ap.add_argument("--cli", default=DEFAULT_CLI)
+    ap.add_argument("audio")
+    args = ap.parse_args()
+
+    work = tempfile.mkdtemp(prefix="whisper-scrawl-")
+    try:
+        base = os.path.join(work, "out")
+        cmd = [args.cli, "-m", args.model, "-l", args.language,
+               "-ojf", "-of", base, "-np", args.audio]
+        res = subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if res.returncode != 0:
+            sys.stderr.write(res.stderr.decode("utf-8", "replace"))
+            return 1
+        with open(base + ".json", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    segments, words = [], []
+    for seg in data.get("transcription", []):
+        text = seg.get("text", "").strip()
+        off = seg.get("offsets") or {}
+        t0, t1 = int(off.get("from", 0)), int(off.get("to", 0))
+        if text:
+            segments.append({"t0": t0, "t1": max(t0, t1), "text": text})
+            words.extend(build_words(seg.get("tokens", [])))
+
+    out = {
+        "version": 1,
+        "model": os.path.basename(args.model),
+        "text": " ".join(s["text"] for s in segments),
+        "segments": segments,
+        "words": words,
+        # whisper.cpp token times without DTW are the decoder's own guess, not an
+        # aligner's measurement, so Scrawl must treat them as estimated.
+        "estimated": True,
+    }
+    sys.stdout.write(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
