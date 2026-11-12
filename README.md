@@ -79,6 +79,18 @@ and leave no temporary files; a real Scrawl capture reports `transcript.source =
 Remove the two keys from `config.json`, delete the clone and the model, and `brew uninstall whisper.cpp`
 if nothing else uses it.
 
+## Support
+
+If this project is useful to you, you can support its development with a crypto donation:
+
+| Network | Address |
+|---|---|
+| Bitcoin (BTC) | `bc1q0sw0w9mqtghrxfyyqw834sjs7t7rr7futulgv4` |
+| Ethereum (ETH) | `0xAb3a04a4b52547a7f8B00abb0088D3d9d11CA461` |
+| Solana (SOL) | `2QBoKrUaiAcAKxNJ7o9oe9Q16ptjLQohR8KyPX2tpJhZ` |
+
+Send each coin only on the network named in its row: a transfer made on another network cannot be recovered.
+
 ## License
 
 MIT
